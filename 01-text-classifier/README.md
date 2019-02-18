@@ -9,10 +9,10 @@ This is a CNN based text classifier for CMU 11-747 Neural Networks for NLP assig
 These scripts works best in both Python 3 and Python 2, below are python packages required.
 
 - torch==1.0.1
-- torchtext=0.3.1
-- nltk=3.4
-- gensim=3.7.1
-- matplotlib=3.0.2
+- torchtext==0.3.1
+- nltk==3.4
+- gensim==3.7.1
+- matplotlib==3.0.2
 
 ## How to Run
 
