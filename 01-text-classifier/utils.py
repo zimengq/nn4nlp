@@ -9,11 +9,9 @@ This script defines some useful utilities for preprocessing data and trainning/t
 """
 
 import os
-import sys
 import torch
 import gensim
 import numpy as np
-import requests
 
 from matplotlib import pyplot as plt
 from torchtext import data, vocab
@@ -56,7 +54,7 @@ def load_w2v_vectors(fname):
     """
     print("Loading word2vec model from {}".format(fname))
     if not os.path.exists('model/w2v.mod'):
-        model = gensim.models.KeyedVectors.load_word2vec_format(fname, binary=True, limit=100000)
+        model = gensim.models.KeyedVectors.load_word2vec_format(fname, binary=True, limit=1000000)
         model.wv.save_word2vec_format('model/w2v.mod')
     return vocab.Vectors('model/w2v.mod')
 
@@ -101,27 +99,5 @@ def write_to_file(predictions, fname):
     with open(fname, 'w') as f:
         for line in predictions:
             f.write(str(line) + '\n')
-    print("Successfully write predictions to" + fname)
-
-
-def elegant_download(link, dir, fname):
-    """
-    From stackoverflow
-    """
-    with open(os.path.join(dir, fname), "wb") as f:
-        print("Downloading %s" % fname)
-        response = requests.get(link, stream=True)
-        total_length = response.headers.get('content-length')
-
-        if total_length is None:  # no content length header
-            f.write(response.content)
-        else:
-            dl = 0
-            total_length = int(total_length)
-            for data in response.iter_content(chunk_size=4096):
-                dl += len(data)
-                f.write(data)
-                done = int(50 * dl / total_length)
-                sys.stdout.write("\r[%s%s]" % ('=' * done, ' ' * (50 - done)))
-                sys.stdout.flush()
+    print("Successfully write predictions to " + fname)
 

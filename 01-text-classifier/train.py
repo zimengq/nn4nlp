@@ -15,8 +15,10 @@ import logging
 import torch
 import random
 import argparse
+import codecs
+import pandas as pd
 
-from torchtext import data
+from torchtext import data, vocab
 from nltk.corpus import stopwords
 from utils import *
 from preprocessor import Preprocessor
@@ -90,6 +92,7 @@ class ConvNet(torch.nn.Module):
         # forward propagation
         embedding_layer = self.embedding(x).permute(0, 2, 1)
         conv_layer = [torch.nn.functional.relu(conv(embedding_layer)) for conv in self.convs]
+        torch.save(conv_layer, 'model/convs')
         pooling_layer = [self.pooling(conv) for conv in conv_layer]
         fc_layer = self.fc(self.dropout(torch.cat(pooling_layer, dim=1)).squeeze(2))
 
@@ -128,7 +131,7 @@ def train(model, train_iter, optimizer, criterion):
         avg_loss += loss.item()
         correct += torch.eq(torch.argmax(prediction_result, dim=1), batch.label).sum().item()
 
-    return avg_loss / len(train_iter), correct/total_sent
+    return avg_loss / len(train_iter), float(correct)/float(total_sent)
 
 
 def evaluate(model, iterator, criterion):
@@ -162,7 +165,7 @@ def evaluate(model, iterator, criterion):
             pred_labels.extend(pred.tolist())
             correct += torch.eq(pred, batch.label).sum().item()
 
-    return avg_loss/len(iterator), correct/total_sent, [LABEL.vocab.itos[label] for label in pred_labels]
+    return avg_loss/len(iterator), float(correct)/float(total_sent), [LABEL.vocab.itos[label] for label in pred_labels]
 
 
 def test(model, iterator):
@@ -188,13 +191,45 @@ def test(model, iterator):
     return [LABEL.vocab.itos[label] for label in pred_labels]
 
 
+def compute_saliency_map(model, sample_doc, label, _dir, fname, criterion, itos):
+    """
+    This function is modified from https://github.com/EdGENetworks/anuvada
+    """
+    model.zero_grad()
+    model.eval()
+    scores = model.forward(sample_doc.unsqueeze(1))
+    loss = criterion(scores, label)
+    loss.backward()
+    grad_of_param = {}
+    for name, parameter in model.named_parameters():
+        if 'embed' in name:
+            grad_of_param[name] = parameter.grad
+    grad_embed = grad_of_param['embedding.weight']
+    sensitivity = torch.pow(grad_embed, 2).mean(dim=1)
+    sensitivity = list(sensitivity.data.cpu().numpy())
+    i2w = [itos[zz] for zz in sample_doc.data.tolist()]
+    activations = [sensitivity[yy] for yy in sample_doc.data.tolist()]
+    df = pd.DataFrame({'word': i2w, 'senstivity': activations})
+    words = df.word.values
+    values = df.senstivity.values
+    if not os.path.exists(_dir):
+        try:
+            os.mkdir(_dir)
+        except OSError:
+            print("Can not create directory.")
+    with codecs.open(os.path.join(_dir, fname), "w", encoding="utf-8") as html_file:
+        for word, alpha in zip(words, values / values.max()):
+            if not word == '<pad>':
+                html_file.write('<font style="background: rgba(255, 255, 0, %f)">%s</font>\n' % (alpha, word))
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
     parser = argparse.ArgumentParser(description='CNN parameters.')
     parser.add_argument('--embedding', help='pre-trained word embeddings <w2v|glove>, default is w2v.',
-                        default='w2v', choices=['w2v', 'glove'])
+                        default='w2v', choices=['w2v', 'glove', 'fasttext'])
     parser.add_argument('--filter_num', help='number of filters for each filter size', default=100, type=int)
     parser.add_argument('--filter_sizes', help='list type, sizes of filters.', default=[3, 4, 5], nargs='+', type=int)
     parser.add_argument(
@@ -210,14 +245,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # load pre-trained word embeddings
-    if args.embedding == 'glove':
-        if not os.path.exists('model/glove.42B.300d.txt'):
-            elegant_download('http://nlp.stanford.edu/data/glove.42B.300d.zip', 'model', 'glove.42B.300d.txt')
-        pretrained_embeddings = load_glove_vectors('model/glove.42B.300d.txt')
+    if args.embedding.lower() == 'glove':
+        pretrained_embeddings = vocab.GloVe(name='42B')
+    elif args.embedding.lower() == 'fasttext':
+        pretrained_embeddings = vocab.FastText(max_vectors=500000)
     else:
         if not os.path.exists('model/GoogleNews-vectors-negative300.bin.gz'):
-            elegant_download('https://drive.google.com/uc?export=download&confirm=irnl&id=0B7XkCwpI5KDYNlNUTTlSS21pQmM',
-                             'model', 'glove.42B.300d.txt')
+            os.system('wget https://drive.google.com/uc?export=download&confirm=irnl&id=0B7XkCwpI5KDYNlNUTTlSS21pQmM')
         pretrained_embeddings = load_w2v_vectors('model/GoogleNews-vectors-negative300.bin.gz')
 
     # prepare dataset
@@ -260,6 +294,16 @@ if __name__ == '__main__':
         )
     logger.info('Done!')
     TEXT.vocab.set_vectors(pretrained_embeddings.stoi, pretrained_embeddings.vectors, pretrained_embeddings.dim)
+
+    valid_iter, test_iter = data.Iterator.splits(
+        (valid_data, test_data),
+        batch_size=BATCH_SIZE,
+        device=DEVICE,
+        sort=False,
+        sort_within_batch=False,
+        repeat=False,
+        shuffle=False
+    )
 
     # Construct model
     logger.info('Start training model...')
@@ -304,6 +348,10 @@ if __name__ == '__main__':
             best_valid_predictions = valid_predictions
             test_predictions = test(model, test_iter)
 
+    sample = "i love natural language processing very much".split()
+    sample_doc = torch.tensor([TEXT.vocab.stoi[char] for char in sample])
+    label = torch.tensor(LABEL.vocab.stoi["Natural sciences "]).unsqueeze(0)
+    compute_saliency_map(model, sample_doc, label, 'figs', 'saliency.html', criterion, pretrained_embeddings.itos)
     write_to_file(best_valid_predictions, 'val_pred.txt')
     write_to_file(test_predictions, 'test_pred.txt')
     visualize_data(train_acc_record, valid_acc_record, 'acc')

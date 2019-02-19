@@ -23,6 +23,7 @@ class Preprocessor(object):
         self.words = []
 
     def tokenizer(self, sentence):
+        sentence = sentence.replace(' @', '').replace('@ ', '')
         for punc in string.punctuation:
             sentence = sentence.replace(punc, '')
         sentence = sentence.split()
